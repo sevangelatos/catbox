@@ -86,6 +86,7 @@ BIND_ARGS=()
 [[ -d "$REAL_HOME/.local" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.local" "$REAL_HOME/.local")
 [[ -d "$REAL_HOME/.npm" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.npm" "$REAL_HOME/.npm")
 [[ -d "$REAL_HOME/.opencode" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.opencode" "$REAL_HOME/.opencode")
+[[ -d "$REAL_HOME/.config/opencode" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.config/opencode" "$REAL_HOME/.config/opencode")
 
 # Build the bwrap command as an array
 BWRAP_ARGS=(
