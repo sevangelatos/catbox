@@ -77,6 +77,36 @@ echo "--------------------------------------------------"
 SNAP_ARG=()
 [[ -d /snap ]] && SNAP_ARG=(--ro-bind /snap /snap)
 
+CGROUP_ARGS=()
+[[ -d /sys/fs/cgroup ]] && CGROUP_ARGS=(--ro-bind /sys/fs/cgroup /sys/fs/cgroup)
+
+# Fix DNS: /etc/resolv.conf is often a symlink to /run/systemd/resolve/...
+# but /run is a tmpfs in the sandbox, breaking the symlink.
+# Bind the systemd-resolve directory so the symlink resolves correctly.
+DNS_ARGS=()
+if [[ -d /run/systemd/resolve ]]; then
+    DNS_ARGS=(--ro-bind /run/systemd/resolve /run/systemd/resolve)
+fi
+
+# Fix merged-/usr: On systems where /bin, /lib, /sbin are symlinks into /usr,
+# --ro-bind follows the symlink and mounts the target as a real directory.
+# This breaks relative symlinks inside /lib that expect /lib to be a symlink
+# (e.g. /lib/gvfs/gvfsd -> ../../libexec/gvfsd resolves to /libexec/ not /usr/libexec/).
+# Detect and recreate the symlink structure.
+ROOT_ARGS=()
+SYS_BINDS=()
+if [[ -L /bin ]]; then
+    # Merged-/usr: use tmpfs root + symlinks, skip redundant /bin,/lib binds
+    ROOT_ARGS=(--tmpfs / --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/sbin /sbin)
+else
+    # Traditional: bind-mount real directories
+    SYS_BINDS=(--ro-bind /bin /bin --ro-bind /lib /lib --ro-bind /lib64 /lib64 --ro-bind /sbin /sbin)
+fi
+
+# Fix missing data files that live outside /usr
+DATA_BINDS=()
+[[ -d /var/lib/ieee-data ]] && DATA_BINDS=(--ro-bind /var/lib/ieee-data /var/lib/ieee-data)
+
 # Build optional bind args (check existence before binding)
 BIND_ARGS=()
 [[ -f "$REAL_HOME/.bashrc" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.bashrc" "$REAL_HOME/.bashrc")
@@ -98,18 +128,20 @@ BWRAP_ARGS=(
     --unshare-pid
     --unshare-ipc
 
+    "${ROOT_ARGS[@]:+${ROOT_ARGS[@]}}"
+
     --ro-bind /usr /usr
-    --ro-bind /bin /bin
-    --ro-bind /lib /lib
-    --ro-bind /lib64 /lib64
+    "${SYS_BINDS[@]:+${SYS_BINDS[@]}}"
     --ro-bind /etc /etc
-    --ro-bind /sbin /sbin
     --ro-bind /opt /opt
     "${SNAP_ARG[@]:+${SNAP_ARG[@]}}"
+    "${CGROUP_ARGS[@]:+${CGROUP_ARGS[@]}}"
 
     --tmpfs /tmp
     --tmpfs /var/tmp
     --tmpfs /run
+    "${DNS_ARGS[@]:+${DNS_ARGS[@]}}"
+    "${DATA_BINDS[@]:+${DATA_BINDS[@]}}"
     --proc /proc
     --dev /dev
 
