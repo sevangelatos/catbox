@@ -8,7 +8,7 @@ trap cleanup EXIT
 # --- Help ---
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<'EOF'
-Usage: sandbox.sh [WORKSPACE] [-- COMMAND...]
+Usage: catbox [WORKSPACE] [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -19,10 +19,11 @@ Arguments:
   COMMAND          Command to run inside the sandbox
 
 Examples:
-  sandbox.sh                              # Use ./sandboxes/default
-  sandbox.sh myproject                    # Use ./sandboxes/myproject
-  sandbox.sh /path/to/existing/dir        # Use /path/to/existing/dir
-  sandbox.sh dev -- python script.py
+  catbox                              # Use ./sandboxes/default
+  catbox myproject                    # Use ./sandboxes/myproject
+  catbox /path/to/existing/dir        # Use /path/to/existing/dir
+  catbox -- python script.py          # Run a command
+  catbox dev -- python script.py      # Run a command in dev workspace
 EOF
     exit 0
 fi
@@ -40,7 +41,7 @@ else
         echo "Error: Workspace name must be alphanumeric (dashes and underscores allowed)."
         exit 1
     fi
-    BASE_WORKSPACE_DIR="$(pwd)/sandboxes"
+    BASE_WORKSPACE_DIR="${HOME}/.sandboxes"
     HOST_WORKSPACE_PATH="$BASE_WORKSPACE_DIR/$WORKSPACE_INPUT"
 fi
 

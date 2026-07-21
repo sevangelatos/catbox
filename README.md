@@ -17,7 +17,8 @@ catbox [WORKSPACE] [-- COMMAND...]
 | Interactive | `catbox` | Launch interactive bash in `./sandboxes/default` |
 | Named workspace | `catbox myproject` | Launch in `./sandboxes/myproject` |
 | Existing directory | `catbox /path/to/dir` | Launch in any existing directory |
-| Run a command | `catbox dev -- python script.py` | Run a command inside the sandbox |
+| Run a command | `catbox -- python script.py` | Run a command in the default workspace |
+| Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
 
 ## Security Model
 
