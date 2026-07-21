@@ -14,8 +14,8 @@ catbox [WORKSPACE] [-- COMMAND...]
 
 | Mode | Example | Description |
 |------|---------|-------------|
-| Interactive | `catbox` | Launch interactive bash in `./sandboxes/default` |
-| Named workspace | `catbox myproject` | Launch in `./sandboxes/myproject` |
+| Interactive | `catbox` | Launch interactive bash in `~/.sandboxes/default` |
+| Named workspace | `catbox myproject` | Launch in `~/.sandboxes/myproject` |
 | Existing directory | `catbox /path/to/dir` | Launch in any existing directory |
 | Run a command | `catbox -- python script.py` | Run a command in the default workspace |
 | Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
@@ -35,7 +35,7 @@ catbox [WORKSPACE] [-- COMMAND...]
 
 ## Workspaces
 
-Without arguments, catbox uses `./sandboxes/default`. Pass a name to create or reuse a workspace under `./sandboxes/`. Pass an absolute or relative path to use an existing directory directly.
+Without arguments, catbox uses `~/.sandboxes/default`. Pass a name to create or reuse a workspace under `~/.sandboxes/`. Pass an absolute or relative path to use an existing directory directly.
 
 Workspace names must be alphanumeric (dashes and underscores allowed).
 

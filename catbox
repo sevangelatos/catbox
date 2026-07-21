@@ -14,13 +14,13 @@ Launch a bubblewrap sandbox for a coding agent.
 
 Arguments:
   WORKSPACE        Existing directory to use as workspace, or name of a
-                   new workspace under ./sandboxes/ (default: default)
+                   new workspace under ~/.sandboxes/ (default: default)
   --               Optional separator before command args
   COMMAND          Command to run inside the sandbox
 
 Examples:
-  catbox                              # Use ./sandboxes/default
-  catbox myproject                    # Use ./sandboxes/myproject
+  catbox                              # Use ~/.sandboxes/default
+  catbox myproject                    # Use ~/.sandboxes/myproject
   catbox /path/to/existing/dir        # Use /path/to/existing/dir
   catbox -- python script.py          # Run a command
   catbox dev -- python script.py      # Run a command in dev workspace
@@ -33,7 +33,7 @@ WORKSPACE_INPUT="${1:-default}"
 shift 2>/dev/null || true
 
 # If input is an existing directory, use it directly.
-# Otherwise, treat it as a workspace name under ./sandboxes/
+# Otherwise, treat it as a workspace name under ~/.sandboxes/
 if [[ -d "$WORKSPACE_INPUT" ]]; then
     HOST_WORKSPACE_PATH="$(realpath "$WORKSPACE_INPUT")"
 else
