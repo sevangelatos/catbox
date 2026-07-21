@@ -76,8 +76,14 @@ echo "--------------------------------------------------"
 SNAP_ARG=()
 [[ -d /snap ]] && SNAP_ARG=(--ro-bind /snap /snap)
 
-BASHRC_ARG=()
-[[ -f "$REAL_HOME/.bashrc" ]] && BASHRC_ARG=(--bind "$REAL_HOME/.bashrc" "$REAL_HOME/.bashrc")
+# Build optional bind args (check existence before binding)
+BIND_ARGS=()
+[[ -f "$REAL_HOME/.bashrc" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.bashrc" "$REAL_HOME/.bashrc")
+[[ -f "$REAL_HOME/.gitconfig" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.gitconfig" "$REAL_HOME/.gitconfig")
+[[ -f "$REAL_HOME/.profile" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.profile" "$REAL_HOME/.profile")
+[[ -d "$REAL_HOME/.pi" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.pi" "$REAL_HOME/.pi")
+[[ -d "$REAL_HOME/.local" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.local" "$REAL_HOME/.local")
+[[ -d "$REAL_HOME/.npm" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.npm" "$REAL_HOME/.npm")
 
 # Build the bwrap command as an array
 BWRAP_ARGS=(
@@ -95,7 +101,7 @@ BWRAP_ARGS=(
     --ro-bind /etc /etc
     --ro-bind /sbin /sbin
     --ro-bind /opt /opt
-    "${SNAP_ARG[@]}"
+    "${SNAP_ARG[@]:+${SNAP_ARG[@]}}"
 
     --tmpfs /tmp
     --tmpfs /var/tmp
@@ -104,12 +110,7 @@ BWRAP_ARGS=(
     --dev /dev
 
     --tmpfs "$REAL_HOME"
-    --bind "$REAL_HOME/.local" "$REAL_HOME/.local"
-    --bind "$REAL_HOME/.npm" "$REAL_HOME/.npm"
-    --bind "$REAL_HOME/.gitconfig" "$REAL_HOME/.gitconfig"
-    "${BASHRC_ARG[@]}"
-    --bind "$REAL_HOME/.profile" "$REAL_HOME/.profile"
-    --bind "$REAL_HOME/.pi" "$REAL_HOME/.pi"
+    "${BIND_ARGS[@]:+${BIND_ARGS[@]}}"
     --bind "$HOST_WORKSPACE_PATH" "$REAL_HOME/workspace"
 
     --share-net
@@ -120,4 +121,8 @@ BWRAP_ARGS=(
     --chdir "$REAL_HOME/workspace"
 )
 
-exec bwrap "${BWRAP_ARGS[@]}" /bin/bash "$@"
+if [[ $# -eq 0 ]]; then
+    exec bwrap "${BWRAP_ARGS[@]}" /bin/bash
+else
+    exec bwrap "${BWRAP_ARGS[@]}" "$@"
+fi
