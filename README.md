@@ -29,7 +29,7 @@ catbox [WORKSPACE] [-- COMMAND...]
 - **Read-only system** — `/usr`, `/bin`, `/lib`, `/lib64`, `/etc`, `/sbin`, `/opt` are mounted read-only
 - **Clean home** — `$HOME` is a tmpfs with only whitelisted paths bound in:
   - `.bashrc`, `.gitconfig`, `.profile` (files)
-  - `.pi`, `.local`, `.npm` (directories)
+  - `.pi`, `.local`, `.npm`, `.opencode` (directories)
 - **Temporary directories** — `/tmp`, `/var/tmp`, `/run` are tmpfs
 - **Network** — shared with the host
 
