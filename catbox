@@ -4,13 +4,14 @@ set -euo pipefail
 # --- Help ---
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     cat <<'EOF'
-Usage: catbox [WORKSPACE] [-- COMMAND...]
+Usage: catbox [WORKSPACE] [--gpu] [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
 Arguments:
   WORKSPACE        Existing directory to use as workspace, or name of a
                    new workspace under ~/.sandboxes/ (default: default)
+  --gpu            Passthrough GPU devices (NVIDIA / DRM) into sandbox
   --               Optional separator before command args
   COMMAND          Command to run inside the sandbox
 
@@ -20,21 +21,23 @@ Examples:
   catbox /path/to/existing/dir        # Use /path/to/existing/dir
   catbox -- python script.py          # Run a command
   catbox dev -- python script.py      # Run a command in dev workspace
+  catbox --gpu -- nvidia-smi          # Run with GPU passthrough
 EOF
     exit 0
 fi
 
 # --- Configuration ---
 WORKSPACE_INPUT="default"
-if [[ "${1:-}" == "--" ]]; then
-    shift
-elif [[ "${2:-}" == "--" ]]; then
-    WORKSPACE_INPUT="$1"
-    shift 2
-elif [[ -n "${1:-}" ]]; then
-    WORKSPACE_INPUT="$1"
-    shift 1
-fi
+GPU_ENABLED=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --gpu) GPU_ENABLED=true; shift ;;
+        --)    shift; break ;;
+        -*)    echo "Unknown option: $1" >&2; exit 1 ;;
+        *)     WORKSPACE_INPUT="$1"; shift ;;
+    esac
+done
 
 # If input is an existing directory, use it directly.
 # Otherwise, treat it as a workspace name under ~/.sandboxes/
@@ -75,6 +78,7 @@ echo "🚀 Launching coding agent sandbox..."
 echo "👤  User: $REAL_USER (UID=$REAL_UID, GID=$REAL_GID)"
 echo "📂  Workspace: $HOST_WORKSPACE_PATH"
 echo "🔒  System: RO  |  Home: whitelist-only  |  Namespaces: user+pid+ipc"
+[[ "$GPU_ENABLED" == "true" ]] && echo "🎮  GPU: passthrough enabled (NVIDIA + DRM)"
 echo "--------------------------------------------------"
 
 # --- Build conditional arguments ---
@@ -110,6 +114,18 @@ fi
 # Fix missing data files that live outside /usr
 DATA_BINDS=()
 [[ -d /var/lib/ieee-data ]] && DATA_BINDS=(--ro-bind /var/lib/ieee-data /var/lib/ieee-data)
+
+# GPU passthrough: bind NVIDIA + DRM devices and sysfs for PCI enumeration
+GPU_ARGS=()
+if [[ "${GPU_ENABLED:-}" == "true" ]]; then
+    for dev in /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset /dev/dri /dev/dxg; do
+        [[ -e "$dev" ]] && GPU_ARGS+=(--dev-bind-try "$dev" "$dev")
+    done
+    for i in {0..15}; do
+        [[ -e "/dev/nvidia$i" ]] && GPU_ARGS+=(--dev-bind-try "/dev/nvidia$i" "/dev/nvidia$i")
+    done
+    GPU_ARGS+=(--ro-bind /sys /sys)
+fi
 
 # Build optional bind args (check existence before binding)
 BIND_ARGS=()
@@ -148,6 +164,7 @@ BWRAP_ARGS=(
     "${DATA_BINDS[@]:+${DATA_BINDS[@]}}"
     --proc /proc
     --dev /dev
+    "${GPU_ARGS[@]:+${GPU_ARGS[@]}}"
 
     --tmpfs "$REAL_HOME"
     "${BIND_ARGS[@]:+${BIND_ARGS[@]}}"
