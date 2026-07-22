@@ -148,26 +148,26 @@ BWRAP_ARGS=(
     --unshare-pid
     --unshare-ipc
 
-    "${ROOT_ARGS[@]:+${ROOT_ARGS[@]}}"
+    "${ROOT_ARGS[@]}"
 
     --ro-bind /usr /usr
-    "${SYS_BINDS[@]:+${SYS_BINDS[@]}}"
+    "${SYS_BINDS[@]}"
     --ro-bind /etc /etc
     --ro-bind /opt /opt
-    "${SNAP_ARG[@]:+${SNAP_ARG[@]}}"
-    "${CGROUP_ARGS[@]:+${CGROUP_ARGS[@]}}"
+    "${SNAP_ARG[@]}"
+    "${CGROUP_ARGS[@]}"
 
     --tmpfs /tmp
     --tmpfs /var/tmp
     --tmpfs /run
-    "${DNS_ARGS[@]:+${DNS_ARGS[@]}}"
-    "${DATA_BINDS[@]:+${DATA_BINDS[@]}}"
+    "${DNS_ARGS[@]}"
+    "${DATA_BINDS[@]}"
     --proc /proc
     --dev /dev
-    "${GPU_ARGS[@]:+${GPU_ARGS[@]}}"
+    "${GPU_ARGS[@]}"
 
     --tmpfs "$REAL_HOME"
-    "${BIND_ARGS[@]:+${BIND_ARGS[@]}}"
+    "${BIND_ARGS[@]}"
     --bind "$HOST_WORKSPACE_PATH" "$REAL_HOME/workspace"
 
     --share-net
