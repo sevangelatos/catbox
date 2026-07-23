@@ -9,7 +9,7 @@ A [bubblewrap](https://github.com/containers/bubblewrap) sandbox launcher for co
 ## Usage
 
 ```bash
-catbox [WORKSPACE] [-- COMMAND...]
+catbox [WORKSPACE] [--gpu] [-- COMMAND...]
 ```
 
 | Mode | Example | Description |
@@ -19,6 +19,7 @@ catbox [WORKSPACE] [-- COMMAND...]
 | Existing directory | `catbox /path/to/dir` | Launch in any existing directory |
 | Run a command | `catbox -- python script.py` | Run a command in the default workspace |
 | Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
+| GPU Support | `catbox --gpu` | Passthrough GPU devices (NVIDIA / DRM) |
 
 ## Security Model
 
