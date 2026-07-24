@@ -38,6 +38,8 @@ catbox [WORKSPACE] [--gpu] [-- COMMAND...]
 
 Without arguments, catbox uses `~/.sandboxes/default`. Pass a name to create or reuse a workspace under `~/.sandboxes/`. Pass an absolute or relative path to use an existing directory directly.
 
+When using an existing directory, the absolute path is preserved inside the sandbox — the workspace appears at the same path inside and outside the sandbox. Named workspaces are mounted at `~/workspace`.
+
 Workspace names must be alphanumeric (dashes and underscores allowed).
 
 ## Environment
@@ -47,4 +49,4 @@ Inside the sandbox:
 - `HOME` — your real home path (backed by tmpfs + selective binds)
 - `USER` / `LOGNAME` — your real username
 - `PATH` — includes `~/.local/bin` and the detected `pi-node` bin directory
-- Working directory — `$HOME/workspace` (the sandboxed workspace)
+- Working directory — the workspace (preserves absolute path for existing directories, `~/workspace` for named workspaces)
