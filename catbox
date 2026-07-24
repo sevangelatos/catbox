@@ -48,7 +48,7 @@ REAL_GID=$(id -g)
 # Otherwise, treat it as a workspace name under ~/.sandboxes/
 SANDBOX_WORKSPACE_PATH="$REAL_HOME/workspace"
 if [[ -d "$WORKSPACE_INPUT" ]]; then
-    HOST_WORKSPACE_PATH="$(realpath "$WORKSPACE_INPUT")"
+    HOST_WORKSPACE_PATH="$(realpath -s "$WORKSPACE_INPUT")"
     SANDBOX_WORKSPACE_PATH="$HOST_WORKSPACE_PATH"
 else
     if ! [[ "$WORKSPACE_INPUT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
