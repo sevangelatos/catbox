@@ -4,7 +4,8 @@ set -euo pipefail
 # --- Help ---
 usage() {
     cat <<'EOF'
-Usage: catbox [WORKSPACE] [--gpu] [--dry-run] [-- COMMAND...]
+Usage: catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run]
+              [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -12,6 +13,8 @@ Arguments:
   WORKSPACE        Existing directory to use as workspace, or name of a
                    new workspace under ~/.sandboxes/ (default: default)
   --gpu            Passthrough GPU devices (NVIDIA / DRM) into sandbox
+  --ro PATH        Mount PATH read-only at the same path (repeatable)
+  --rw PATH        Mount PATH read-write at the same path (repeatable)
   --dry-run        Print the bwrap command instead of running it
   -h, --help       Show this help
   --               Optional separator before command args
@@ -24,6 +27,7 @@ Examples:
   catbox -- python script.py          # Run a command
   catbox dev -- python script.py      # Run a command in dev workspace
   catbox --gpu -- nvidia-smi          # Run with GPU passthrough
+  catbox --ro ~/datasets --rw /srv/out  # Extra read-only / read-write paths
 EOF
 }
 
@@ -31,12 +35,18 @@ EOF
 WORKSPACE_INPUT="default"
 GPU_ENABLED=false
 DRY_RUN=false
+EXTRA_MOUNTS=()   # entries of the form "ro:/abs/path" or "rw:/abs/path"
+
+die() { echo "Error: $*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --gpu) GPU_ENABLED=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --ro|--rw)
+            [[ $# -ge 2 && "$2" != -- ]] || die "$1 requires a PATH argument"
+            EXTRA_MOUNTS+=("${1#--}:$2"); shift 2 ;;
         --)    shift; break ;;
         -*)    echo "Unknown option: $1" >&2; exit 1 ;;
         *)     WORKSPACE_INPUT="$1"; shift ;;
@@ -63,6 +73,55 @@ else
     HOST_WORKSPACE_PATH="$BASE_WORKSPACE_DIR/$WORKSPACE_INPUT"
 fi
 
+# --- Validate extra mounts ---
+# True if $1 is $2 or lies below it.
+path_within() { [[ "$1" == "$2" || "$1" == "${2%/}/"* ]]; }
+
+# Paths that are already mounted by catbox: extra mounts may not be, inside
+# or above them (read-only system paths), or equal/above them (tmpfs paths).
+RESERVED_TREE=(/usr /etc /opt /bin /lib /lib64 /sbin /snap /proc /dev /sys)
+RESERVED_ROOT=(/tmp /var/tmp /run)
+
+EXTRA_ARGS=()
+EXTRA_PATHS=()
+EXTRA_MODES=()
+WORKSPACE_PATHS=("$(realpath -m "$HOST_WORKSPACE_PATH")" "$(realpath -m "$SANDBOX_WORKSPACE_PATH")")
+for entry in "${EXTRA_MOUNTS[@]}"; do
+    mode="${entry%%:*}"
+    raw="${entry#*:}"
+    [[ -e "$raw" ]] || die "--$mode path does not exist: $raw"
+    path="$(realpath -e "$raw")"
+    [[ "$path" == "/" ]] && die "--$mode cannot mount /"
+    path_within "$REAL_HOME" "$path" && die "--$mode path contains \$HOME: $path"
+    for r in "${RESERVED_TREE[@]}"; do
+        if path_within "$path" "$r" || path_within "$r" "$path"; then
+            die "--$mode path overlaps system path $r: $path"
+        fi
+    done
+    for r in "${RESERVED_ROOT[@]}"; do
+        if [[ "$path" == "$r" ]] || path_within "$r" "$path"; then
+            die "--$mode path overlaps $r: $path"
+        fi
+    done
+    for w in "${WORKSPACE_PATHS[@]}"; do
+        if path_within "$path" "$w" || path_within "$w" "$path"; then
+            die "--$mode path overlaps the workspace ($w): $path"
+        fi
+    done
+    for other in "${EXTRA_PATHS[@]}"; do
+        if path_within "$path" "$other" || path_within "$other" "$path"; then
+            die "--$mode path overlaps another extra path ($other): $path"
+        fi
+    done
+    EXTRA_PATHS+=("$path")
+    EXTRA_MODES+=("$mode")
+    if [[ "$mode" == "ro" ]]; then
+        EXTRA_ARGS+=(--ro-bind "$path" "$path")
+    else
+        EXTRA_ARGS+=(--bind "$path" "$path")
+    fi
+done
+
 # --- Detect pi-node directory (for node, npm, pi binaries) ---
 PI_NODE_BIN=
 shopt -s nullglob
@@ -86,6 +145,9 @@ if [[ "$DRY_RUN" != "true" ]]; then
     echo "📂  Workspace: $HOST_WORKSPACE_PATH → $SANDBOX_WORKSPACE_PATH"
     echo "🔒  System: RO  |  Home: whitelist-only  |  Namespaces: user+pid+ipc"
     [[ "$GPU_ENABLED" == "true" ]] && echo "🎮  GPU: passthrough enabled (NVIDIA + DRM)"
+    for i in "${!EXTRA_PATHS[@]}"; do
+        echo "📎  Extra path (${EXTRA_MODES[$i]}): ${EXTRA_PATHS[$i]}"
+    done
     echo "--------------------------------------------------"
 fi
 
@@ -178,6 +240,7 @@ BWRAP_ARGS=(
     --tmpfs "$REAL_HOME"
     "${BIND_ARGS[@]}"
     --bind "$HOST_WORKSPACE_PATH" "$SANDBOX_WORKSPACE_PATH"
+    "${EXTRA_ARGS[@]}"
 
     --share-net
     --setenv HOME "$REAL_HOME"

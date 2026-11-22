@@ -9,7 +9,7 @@ A [bubblewrap](https://github.com/containers/bubblewrap) sandbox launcher for co
 ## Usage
 
 ```bash
-catbox [WORKSPACE] [--gpu] [--dry-run] [-- COMMAND...]
+catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run] [-- COMMAND...]
 ```
 
 | Mode | Example | Description |
@@ -20,6 +20,7 @@ catbox [WORKSPACE] [--gpu] [--dry-run] [-- COMMAND...]
 | Run a command | `catbox -- python script.py` | Run a command in the default workspace |
 | Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
 | GPU Support | `catbox --gpu` | Passthrough GPU devices (NVIDIA / DRM) |
+| Extra paths | `catbox --ro ~/data --rw /srv/out` | Mount extra paths read-only / read-write at the same path |
 | Dry run | `catbox --dry-run` | Print the `bwrap` command without running it |
 
 ## Security Model
@@ -43,6 +44,15 @@ Without arguments, catbox uses `~/.sandboxes/default`. Pass a name to create or 
 When using an existing directory, the absolute path is preserved inside the sandbox — the workspace appears at the same path inside and outside the sandbox. Named workspaces are mounted at `~/workspace`.
 
 Workspace names must be alphanumeric (dashes and underscores allowed).
+
+## Extra paths
+
+`--ro PATH` and `--rw PATH` (both repeatable) mount additional host paths at the same absolute path inside the sandbox. Symlinks are resolved first. catbox exits with an error if a path:
+
+- does not exist
+- is `/` or contains/equals `$HOME`
+- overlaps a system path already mounted (`/usr`, `/etc`, `/opt`, `/bin`, `/lib`, `/lib64`, `/sbin`, `/snap`, `/proc`, `/dev`, `/sys`), or equals/contains `/tmp`, `/var/tmp` or `/run`
+- overlaps the workspace or another extra path
 
 ## Environment
 

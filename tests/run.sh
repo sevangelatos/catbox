@@ -62,5 +62,43 @@ run --dry-run newws_test-1
 ok "named workspace mounted at ~/workspace" has "$HOME/workspace"
 ok "dry-run does not create workspace" test ! -e "$HOME/.sandboxes/newws_test-1"
 
+# --- extra paths ---
+mkdir -p "$TMP/ws" "$TMP/ro" "$TMP/rw" "$TMP/rw/inner"
+rm -rf "$TMP/rw/inner"
+ln -s "$TMP/ro" "$TMP/rolink"
+
+run --dry-run "$TMP/ws" --ro "$TMP/ro" --rw "$TMP/rw"
+ok "ro mount" has "--ro-bind $TMP/ro $TMP/ro"
+ok "rw mount" has "--bind $TMP/rw $TMP/rw"
+
+run --dry-run "$TMP/ws" --ro "$TMP/rolink"
+ok "symlink resolved" has "--ro-bind $TMP/ro $TMP/ro"
+
+run --dry-run "$TMP/ws" --ro "$TMP/nope"
+ok "missing path fails" test $RC -ne 0
+ok "missing path message" errhas "does not exist"
+
+run --dry-run "$TMP/ws" --ro
+ok "missing value fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro -- true
+ok "-- is not a path" test $RC -ne 0
+
+run --dry-run "$TMP/ws" --ro /
+ok "root fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --rw "$HOME"
+ok "HOME fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --rw "$(dirname "$HOME")"
+ok "parent of HOME fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro /usr/share
+ok "inside system path fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro /tmp
+ok "/tmp fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro /var
+ok "parent of /var/tmp fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro "$TMP/ws"
+ok "workspace overlap fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --ro "$TMP/ro" --rw "$TMP/rolink"
+ok "duplicate extra path fails" test $RC -ne 0
+
 echo "passed: $PASS, failed: $FAIL"
 [[ $FAIL -eq 0 ]]
