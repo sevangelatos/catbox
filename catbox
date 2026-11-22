@@ -5,7 +5,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]...
-              [--no-net] [--forward PORT]... [--dry-run] [-- COMMAND...]
+              [--no-net] [--forward PORT]... [--docker] [--dry-run]
+              [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -21,6 +22,11 @@ Arguments:
                    loopback. SPEC is PORT or HOST_PORT:SANDBOX_PORT
                    (repeatable, implies --no-net, needs socat;
                    SANDBOX_PORT must be >= 1024)
+  --docker         Allow running docker containers: gives the sandbox access
+                   to the rootless docker socket if present, otherwise to
+                   the ROOTFUL /var/run/docker.sock (root-equivalent on
+                   the host: this defeats the sandbox). Incompatible with
+                   --no-net, --forward and --ro.
   --dry-run        Print the bwrap command instead of running it
   -h, --help       Show this help
   --               Optional separator before command args
@@ -35,6 +41,7 @@ Examples:
   catbox --gpu -- nvidia-smi          # Run with GPU passthrough
   catbox --ro ~/datasets --rw /srv/out  # Extra read-only / read-write paths
   catbox --forward 11434 -- pi        # Only reach host localhost:11434
+  catbox --docker -- docker ps        # Use the host docker daemon
 EOF
 }
 
@@ -43,6 +50,7 @@ WORKSPACE_INPUT="default"
 GPU_ENABLED=false
 DRY_RUN=false
 NO_NET=false
+DOCKER_ENABLED=false
 FORWARDS=()       # entries of the form "HOST_PORT:SANDBOX_PORT"
 EXTRA_MOUNTS=()   # entries of the form "ro:/abs/path" or "rw:/abs/path"
 
@@ -57,6 +65,7 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 && "$2" != -- ]] || die "$1 requires a PATH argument"
             EXTRA_MOUNTS+=("${1#--}:$2"); shift 2 ;;
         --no-net) NO_NET=true; shift ;;
+        --docker) DOCKER_ENABLED=true; shift ;;
         --forward)
             [[ $# -ge 2 && "$2" != -- ]] || die "--forward requires a PORT argument"
             spec="$2"
@@ -95,6 +104,36 @@ else
     fi
     BASE_WORKSPACE_DIR="${REAL_HOME}/.sandboxes"
     HOST_WORKSPACE_PATH="$BASE_WORKSPACE_DIR/$WORKSPACE_INPUT"
+fi
+
+# --- Docker: conflicts, daemon socket, workspace path ---
+DOCKER_SOCKET=
+DOCKER_ROOTFUL=false
+if [[ "$DOCKER_ENABLED" == "true" ]]; then
+    [[ "$NO_NET" == "true" ]] && \
+        die "--docker cannot be combined with --no-net/--forward: containers get full host network access"
+    for entry in "${EXTRA_MOUNTS[@]}"; do
+        [[ "$entry" == ro:* ]] && \
+            die "--docker cannot be combined with --ro: a container can mount the path read-write"
+    done
+
+    # CATBOX_ROOTFUL_DOCKER_SOCK exists so tests can run without a docker daemon.
+    ROOTLESS_SOCK="${XDG_RUNTIME_DIR:-/run/user/$REAL_UID}/docker.sock"
+    ROOTFUL_SOCK="${CATBOX_ROOTFUL_DOCKER_SOCK:-/var/run/docker.sock}"
+    if [[ -S "$ROOTLESS_SOCK" ]]; then
+        DOCKER_SOCKET="$ROOTLESS_SOCK"
+    elif [[ -S "$ROOTFUL_SOCK" ]]; then
+        DOCKER_SOCKET="$ROOTFUL_SOCK"
+        DOCKER_ROOTFUL=true
+    else
+        die "--docker: no docker socket found ($ROOTLESS_SOCK or $ROOTFUL_SOCK)"
+    fi
+    [[ -r "$DOCKER_SOCKET" && -w "$DOCKER_SOCKET" ]] || \
+        die "--docker: no read/write permission on $DOCKER_SOCKET (is your user in the docker group?)"
+
+    # The daemon runs on the host, so bind mounts in "docker run -v" use host
+    # paths. Mount named workspaces at their real host path so they line up.
+    SANDBOX_WORKSPACE_PATH="$HOST_WORKSPACE_PATH"
 fi
 
 # --- Validate extra mounts ---
@@ -174,13 +213,19 @@ cleanup() {
     [[ -n "$RUNDIR" ]] && rm -rf "$RUNDIR"
     return 0
 }
-if [[ ${#FORWARDS[@]} -gt 0 ]]; then
+if [[ ${#FORWARDS[@]} -gt 0 || "$DOCKER_ENABLED" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
         RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX"
     else
         RUNDIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX")"
     fi
     RUN_ARGS=(--ro-bind "$RUNDIR" /run/catbox)
+    if [[ "$DOCKER_ENABLED" == "true" ]]; then
+        # Bind over a placeholder file, since /run/catbox is a read-only mount.
+        [[ "$DRY_RUN" == "true" ]] || touch "$RUNDIR/docker.sock"
+        RUN_ARGS+=(--bind "$DOCKER_SOCKET" /run/catbox/docker.sock
+                   --setenv DOCKER_HOST unix:///run/catbox/docker.sock)
+    fi
 fi
 
 # --- Create workspace directory if not already exists ---
@@ -196,6 +241,9 @@ if [[ "$DRY_RUN" != "true" ]]; then
         echo "🌐  Network: isolated (loopback only)"
     else
         echo "🌐  Network: shared with host"
+    fi
+    if [[ "$DOCKER_ENABLED" == "true" ]]; then
+        echo "🐳  Docker: $DOCKER_SOCKET → /run/catbox/docker.sock (DOCKER_HOST)"
     fi
     for f in "${FORWARDS[@]}"; do
         echo "🔌  Forward: host 127.0.0.1:${f%%:*} → sandbox 127.0.0.1:${f##*:}"
@@ -321,13 +369,25 @@ if [[ ${#FORWARDS[@]} -gt 0 ]]; then
     CMD=(/bin/bash /run/catbox/init.sh "${CMD[@]}")
 fi
 
+# Warnings go to stderr so they do not mix with command output.
+if [[ "$DOCKER_ENABLED" == "true" ]]; then
+    if [[ "$DOCKER_ROOTFUL" == "true" ]]; then
+        echo "WARNING: --docker is using the ROOTFUL docker daemon ($DOCKER_SOCKET)." >&2
+        echo "         Anything in the sandbox can get root on this host (e.g. docker run -v /:/host)." >&2
+        echo "         The sandbox protections do not hold. Set up rootless docker for a smaller blast radius." >&2
+    else
+        echo "WARNING: --docker gives the sandbox control of your rootless docker daemon." >&2
+        echo "         Containers can mount your real \$HOME and bypass the clean-home isolation." >&2
+    fi
+fi
+
 if [[ "$DRY_RUN" == "true" ]]; then
     printf '%q ' bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
     echo
     exit 0
 fi
 
-if [[ ${#FORWARDS[@]} -eq 0 ]]; then
+if [[ -z "$RUNDIR" ]]; then
     exec bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
 fi
 

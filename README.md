@@ -9,7 +9,7 @@ A [bubblewrap](https://github.com/containers/bubblewrap) sandbox launcher for co
 ## Usage
 
 ```bash
-catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--no-net] [--forward PORT]... [--dry-run] [-- COMMAND...]
+catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--no-net] [--forward PORT]... [--docker] [--dry-run] [-- COMMAND...]
 ```
 
 | Mode | Example | Description |
@@ -23,6 +23,7 @@ catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--no-net] [--forward P
 | Extra paths | `catbox --ro ~/data --rw /srv/out` | Mount extra paths read-only / read-write at the same path |
 | Isolated network | `catbox --no-net` | Sandbox only has its own empty loopback |
 | Forward a host port | `catbox --forward 11434` | Reach only host `127.0.0.1:11434` (implies `--no-net`) |
+| Docker | `catbox --docker -- docker ps` | Let the sandbox use the host docker daemon (see warning below) |
 | Dry run | `catbox --dry-run` | Print the `bwrap` command without running it |
 
 ## Security Model
@@ -73,6 +74,22 @@ Details:
 - Forwarders are removed when catbox exits, including when it is killed.
 - Without internet access, `npm`, `pip`, `git` over https and similar tools do not work.
 - Anything listening on a forwarded port gets full access from the sandbox.
+
+## Docker
+
+`--docker` binds the docker daemon socket into the sandbox at `/run/catbox/docker.sock` and sets `DOCKER_HOST` to it. The socket is chosen as follows:
+
+1. the rootless socket `$XDG_RUNTIME_DIR/docker.sock`, if it exists
+2. otherwise the rootful `/var/run/docker.sock`
+
+> **Warning:** the daemon runs outside the sandbox. Access to the rootful socket is root-equivalent on the host (`docker run -v /:/host ...`), so the sandbox protections do not hold. A rootless daemon limits this to your user, but containers can still mount your real `$HOME`. catbox prints a warning to stderr in both cases. `--docker` is meant for agents you trust not to attack the sandbox.
+
+Details:
+
+- Your user needs access to the socket (the `docker` group for the rootful daemon).
+- `~/.docker` is not mounted, so registry credentials and contexts stay out of the sandbox.
+- `docker run -v` paths are resolved by the host daemon. A named workspace is therefore mounted at its real host path (`~/.sandboxes/NAME`) instead of `~/workspace`, so `-v "$PWD:/w"` works.
+- Incompatible with `--no-net`/`--forward` (containers have full network access) and with `--ro` (a container can mount the path read-write). catbox exits with an error.
 
 ## Environment
 

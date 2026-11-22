@@ -127,5 +127,42 @@ ok "forward without value fails" test $RC -ne 0
 run --dry-run "$TMP/ws" --forward 80:9090 --forward 81:9090
 ok "duplicate sandbox port fails" test $RC -ne 0
 
+# --- docker ---
+XDG="$TMP/xdg"; mkdir -p "$XDG"
+python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$XDG/docker.sock"
+python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$TMP/rootful.sock"
+
+export XDG_RUNTIME_DIR="$XDG" CATBOX_ROOTFUL_DOCKER_SOCK="$TMP/none.sock"
+run --dry-run "$TMP/ws" --docker
+ok "docker rootless accepted" test $RC -eq 0
+ok "docker rootless socket bound" has "--bind $XDG/docker.sock /run/catbox/docker.sock"
+ok "docker sets DOCKER_HOST" has "DOCKER_HOST unix:///run/catbox/docker.sock"
+ok "docker rootless warning" errhas "rootless docker daemon"
+ok "docker keeps network" has "--share-net"
+
+rm "$XDG/docker.sock"
+run --dry-run "$TMP/ws" --docker
+ok "docker without socket fails" test $RC -ne 0
+ok "docker missing socket message" errhas "no docker socket found"
+
+export CATBOX_ROOTFUL_DOCKER_SOCK="$TMP/rootful.sock"
+run --dry-run "$TMP/ws" --docker
+ok "docker rootful fallback" has "--bind $TMP/rootful.sock /run/catbox/docker.sock"
+ok "docker rootful warning" errhas "ROOTFUL"
+
+run --dry-run "$TMP/ws" --docker --no-net
+ok "docker + no-net fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --docker --forward 8080
+ok "docker + forward fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --docker --ro "$TMP/ro"
+ok "docker + ro fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --docker --rw "$TMP/rw"
+ok "docker + rw allowed" test $RC -eq 0
+
+run --dry-run named-docker-ws --docker
+ok "named workspace at real path with docker" has "--bind $HOME/.sandboxes/named-docker-ws $HOME/.sandboxes/named-docker-ws"
+ok "no ~/workspace with docker" hasnt "$HOME/workspace"
+unset XDG_RUNTIME_DIR CATBOX_ROOTFUL_DOCKER_SOCK
+
 echo "passed: $PASS, failed: $FAIL"
 [[ $FAIL -eq 0 ]]
