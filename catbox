@@ -5,8 +5,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]...
-              [--no-net] [--forward PORT]... [--docker] [--dry-run]
-              [-- COMMAND...]
+              [--no-net] [--forward PORT]... [--docker] [--podman]
+              [--dry-run] [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -27,6 +27,10 @@ Arguments:
                    the ROOTFUL /var/run/docker.sock (root-equivalent on
                    the host: this defeats the sandbox). Incompatible with
                    --no-net, --forward and --ro.
+  --podman         Allow running rootless podman containers inside the
+                   sandbox. Uses a separate image store under
+                   ~/.local/share/catbox-podman, single-UID mapping and
+                   host networking (= the sandbox's network).
   --dry-run        Print the bwrap command instead of running it
   -h, --help       Show this help
   --               Optional separator before command args
@@ -42,6 +46,7 @@ Examples:
   catbox --ro ~/datasets --rw /srv/out  # Extra read-only / read-write paths
   catbox --forward 11434 -- pi        # Only reach host localhost:11434
   catbox --docker -- docker ps        # Use the host docker daemon
+  catbox --podman -- podman run --rm alpine id   # Rootless podman
 EOF
 }
 
@@ -51,6 +56,7 @@ GPU_ENABLED=false
 DRY_RUN=false
 NO_NET=false
 DOCKER_ENABLED=false
+PODMAN_ENABLED=false
 FORWARDS=()       # entries of the form "HOST_PORT:SANDBOX_PORT"
 EXTRA_MOUNTS=()   # entries of the form "ro:/abs/path" or "rw:/abs/path"
 
@@ -66,6 +72,7 @@ while [[ $# -gt 0 ]]; do
             EXTRA_MOUNTS+=("${1#--}:$2"); shift 2 ;;
         --no-net) NO_NET=true; shift ;;
         --docker) DOCKER_ENABLED=true; shift ;;
+        --podman) PODMAN_ENABLED=true; shift ;;
         --forward)
             [[ $# -ge 2 && "$2" != -- ]] || die "--forward requires a PORT argument"
             spec="$2"
@@ -199,13 +206,45 @@ if ! command -v bwrap &> /dev/null; then
     exit 1
 fi
 
+if [[ "$PODMAN_ENABLED" == "true" ]] && ! command -v podman &> /dev/null; then
+    die "--podman requires podman. Install with: sudo apt install podman"
+fi
 if [[ ${#FORWARDS[@]} -gt 0 ]] && ! command -v socat &> /dev/null; then
     die "--forward requires socat. Install with: sudo apt install socat"
 fi
 
 # --- Run directory: host-side sockets shared with the sandbox at /run/catbox ---
 # Holds the forwarding sockets and the sandbox init script.
+# Writes the podman config files into $RUNDIR.
+write_podman_config() {
+    local driver=vfs kmajor kminor
+    IFS=. read -r kmajor kminor _ < <(uname -r)
+    # Native rootless overlayfs needs kernel >= 5.13.
+    (( kmajor > 5 || (kmajor == 5 && ${kminor%%[!0-9]*} >= 13) )) && driver=overlay
+    : > "$RUNDIR/empty"
+    cat > "$RUNDIR/storage.conf" <<CONF
+[storage]
+driver = "$driver"
+graphroot = "$PODMAN_DATA/storage"
+runroot = "/run/user/$REAL_UID/containers"
+
+[storage.options]
+ignore_chown_errors = "true"
+CONF
+    cat > "$RUNDIR/containers.conf" <<'CONF'
+[containers]
+netns = "host"
+cgroups = "enabled"
+log_driver = "k8s-file"
+
+[engine]
+cgroup_manager = "cgroupfs"
+events_logger = "file"
+CONF
+}
+
 RUN_ARGS=()
+HOME_RUN_ARGS=()
 RUNDIR=
 CLEANUP_PIDS=()
 cleanup() {
@@ -213,13 +252,31 @@ cleanup() {
     [[ -n "$RUNDIR" ]] && rm -rf "$RUNDIR"
     return 0
 }
-if [[ ${#FORWARDS[@]} -gt 0 || "$DOCKER_ENABLED" == "true" ]]; then
+if [[ ${#FORWARDS[@]} -gt 0 || "$DOCKER_ENABLED" == "true" || "$PODMAN_ENABLED" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
         RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX"
     else
         RUNDIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX")"
     fi
     RUN_ARGS=(--ro-bind "$RUNDIR" /run/catbox)
+    if [[ "$PODMAN_ENABLED" == "true" ]]; then
+        PODMAN_DATA="$REAL_HOME/.local/share/catbox-podman"
+        PODMAN_CONF="$REAL_HOME/.config/containers"
+        if [[ "$DRY_RUN" != "true" ]]; then
+            mkdir -p "$PODMAN_DATA"
+            write_podman_config
+        fi
+        # Empty subuid/subgid make podman use a single-UID user namespace
+        # instead of calling the (non-functional here) newuidmap.
+        # Home-relative binds must come after the $HOME tmpfs.
+        HOME_RUN_ARGS=(--bind "$PODMAN_DATA" "$PODMAN_DATA"
+                       --ro-bind "$RUNDIR/storage.conf" "$PODMAN_CONF/storage.conf"
+                       --ro-bind "$RUNDIR/containers.conf" "$PODMAN_CONF/containers.conf")
+        RUN_ARGS+=(--ro-bind "$RUNDIR/empty" /etc/subuid
+                   --ro-bind "$RUNDIR/empty" /etc/subgid
+                   --perms 0700 --dir "/run/user/$REAL_UID"
+                   --setenv XDG_RUNTIME_DIR "/run/user/$REAL_UID")
+    fi
     if [[ "$DOCKER_ENABLED" == "true" ]]; then
         # Bind over a placeholder file, since /run/catbox is a read-only mount.
         [[ "$DRY_RUN" == "true" ]] || touch "$RUNDIR/docker.sock"
@@ -244,6 +301,9 @@ if [[ "$DRY_RUN" != "true" ]]; then
     fi
     if [[ "$DOCKER_ENABLED" == "true" ]]; then
         echo "🐳  Docker: $DOCKER_SOCKET → /run/catbox/docker.sock (DOCKER_HOST)"
+    fi
+    if [[ "$PODMAN_ENABLED" == "true" ]]; then
+        echo "🦭  Podman: rootless, store in ~/.local/share/catbox-podman"
     fi
     for f in "${FORWARDS[@]}"; do
         echo "🔌  Forward: host 127.0.0.1:${f%%:*} → sandbox 127.0.0.1:${f##*:}"
@@ -349,6 +409,7 @@ BWRAP_ARGS=(
 
     --tmpfs "$REAL_HOME"
     "${BIND_ARGS[@]}"
+    "${HOME_RUN_ARGS[@]}"
     --bind "$HOST_WORKSPACE_PATH" "$SANDBOX_WORKSPACE_PATH"
     "${EXTRA_ARGS[@]}"
 
