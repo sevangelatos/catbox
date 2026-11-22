@@ -9,7 +9,7 @@ A [bubblewrap](https://github.com/containers/bubblewrap) sandbox launcher for co
 ## Usage
 
 ```bash
-catbox [WORKSPACE] [--gpu] [-- COMMAND...]
+catbox [WORKSPACE] [--gpu] [--dry-run] [-- COMMAND...]
 ```
 
 | Mode | Example | Description |
@@ -20,6 +20,7 @@ catbox [WORKSPACE] [--gpu] [-- COMMAND...]
 | Run a command | `catbox -- python script.py` | Run a command in the default workspace |
 | Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
 | GPU Support | `catbox --gpu` | Passthrough GPU devices (NVIDIA / DRM) |
+| Dry run | `catbox --dry-run` | Print the `bwrap` command without running it |
 
 ## Security Model
 
@@ -27,6 +28,7 @@ catbox [WORKSPACE] [--gpu] [-- COMMAND...]
 - **PID namespace** — isolated process tree
 - **IPC namespace** — isolated inter-process communication
 - **No capabilities** — all Linux capabilities dropped
+- **Die with parent** — the sandbox is killed when catbox exits
 - **Read-only system** — `/usr`, `/bin`, `/lib`, `/lib64`, `/etc`, `/sbin`, `/opt` are mounted read-only
 - **Clean home** — `$HOME` is a tmpfs with only whitelisted paths bound in:
   - `.bashrc`, `.gitconfig`, `.profile` (files)
@@ -50,3 +52,11 @@ Inside the sandbox:
 - `USER` / `LOGNAME` — your real username
 - `PATH` — includes `~/.local/bin` and the detected `pi-node` bin directory
 - Working directory — the workspace (preserves absolute path for existing directories, `~/workspace` for named workspaces)
+
+## Tests
+
+```bash
+tests/run.sh
+```
+
+The tests use `--dry-run`, so no sandbox is started.

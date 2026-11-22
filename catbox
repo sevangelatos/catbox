@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # --- Help ---
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+usage() {
     cat <<'EOF'
-Usage: catbox [WORKSPACE] [--gpu] [-- COMMAND...]
+Usage: catbox [WORKSPACE] [--gpu] [--dry-run] [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -12,6 +12,8 @@ Arguments:
   WORKSPACE        Existing directory to use as workspace, or name of a
                    new workspace under ~/.sandboxes/ (default: default)
   --gpu            Passthrough GPU devices (NVIDIA / DRM) into sandbox
+  --dry-run        Print the bwrap command instead of running it
+  -h, --help       Show this help
   --               Optional separator before command args
   COMMAND          Command to run inside the sandbox
 
@@ -23,16 +25,18 @@ Examples:
   catbox dev -- python script.py      # Run a command in dev workspace
   catbox --gpu -- nvidia-smi          # Run with GPU passthrough
 EOF
-    exit 0
-fi
+}
 
 # --- Configuration ---
 WORKSPACE_INPUT="default"
 GPU_ENABLED=false
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help) usage; exit 0 ;;
         --gpu) GPU_ENABLED=true; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
         --)    shift; break ;;
         -*)    echo "Unknown option: $1" >&2; exit 1 ;;
         *)     WORKSPACE_INPUT="$1"; shift ;;
@@ -74,14 +78,16 @@ if ! command -v bwrap &> /dev/null; then
 fi
 
 # --- Create workspace directory if not already exists ---
-mkdir -p "$HOST_WORKSPACE_PATH"
+[[ "$DRY_RUN" == "true" ]] || mkdir -p "$HOST_WORKSPACE_PATH"
 
-echo "🚀 Launching coding agent sandbox..."
-echo "👤  User: $REAL_USER (UID=$REAL_UID, GID=$REAL_GID)"
-echo "📂  Workspace: $HOST_WORKSPACE_PATH → $SANDBOX_WORKSPACE_PATH"
-echo "🔒  System: RO  |  Home: whitelist-only  |  Namespaces: user+pid+ipc"
-[[ "$GPU_ENABLED" == "true" ]] && echo "🎮  GPU: passthrough enabled (NVIDIA + DRM)"
-echo "--------------------------------------------------"
+if [[ "$DRY_RUN" != "true" ]]; then
+    echo "🚀 Launching coding agent sandbox..."
+    echo "👤  User: $REAL_USER (UID=$REAL_UID, GID=$REAL_GID)"
+    echo "📂  Workspace: $HOST_WORKSPACE_PATH → $SANDBOX_WORKSPACE_PATH"
+    echo "🔒  System: RO  |  Home: whitelist-only  |  Namespaces: user+pid+ipc"
+    [[ "$GPU_ENABLED" == "true" ]] && echo "🎮  GPU: passthrough enabled (NVIDIA + DRM)"
+    echo "--------------------------------------------------"
+fi
 
 # --- Build conditional arguments ---
 SNAP_ARG=()
@@ -149,6 +155,7 @@ BWRAP_ARGS=(
     --cap-drop ALL
     --unshare-pid
     --unshare-ipc
+    --die-with-parent
 
     "${ROOT_ARGS[@]}"
 
@@ -180,8 +187,13 @@ BWRAP_ARGS=(
     --chdir "$SANDBOX_WORKSPACE_PATH"
 )
 
-if [[ $# -eq 0 ]]; then
-    exec bwrap "${BWRAP_ARGS[@]}" /bin/bash
-else
-    exec bwrap "${BWRAP_ARGS[@]}" "$@"
+CMD=("$@")
+[[ ${#CMD[@]} -eq 0 ]] && CMD=(/bin/bash)
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    printf '%q ' bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
+    echo
+    exit 0
 fi
+
+exec bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
