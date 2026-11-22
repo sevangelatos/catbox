@@ -100,5 +100,32 @@ ok "workspace overlap fails" test $RC -ne 0
 run --dry-run "$TMP/ws" --ro "$TMP/ro" --rw "$TMP/rolink"
 ok "duplicate extra path fails" test $RC -ne 0
 
+# --- network ---
+run --dry-run "$TMP/ws" --no-net
+ok "no-net unshares net" has "--unshare-net"
+ok "no-net drops share-net" hasnt "--share-net"
+ok "no-net has no run dir" hasnt "/run/catbox"
+
+run --dry-run "$TMP/ws" --forward 11434 -- echo hi
+ok "forward implies unshare-net" has "--unshare-net"
+ok "forward binds run dir" has "/run/catbox"
+ok "forward uses init script" has "/bin/bash /run/catbox/init.sh echo hi"
+
+run --dry-run "$TMP/ws" --forward 8080:9090 --forward 3000
+ok "remap accepted" test $RC -eq 0
+
+for bad in abc 0 65536 1:2:3 :80 80: -1; do
+    run --dry-run "$TMP/ws" --forward "$bad"
+    ok "invalid forward '$bad' fails" test $RC -ne 0
+done
+run --dry-run "$TMP/ws" --forward 8080:80
+ok "privileged sandbox port fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --forward 80:8080
+ok "privileged host port allowed" test $RC -eq 0
+run --dry-run "$TMP/ws" --forward
+ok "forward without value fails" test $RC -ne 0
+run --dry-run "$TMP/ws" --forward 80:9090 --forward 81:9090
+ok "duplicate sandbox port fails" test $RC -ne 0
+
 echo "passed: $PASS, failed: $FAIL"
 [[ $FAIL -eq 0 ]]

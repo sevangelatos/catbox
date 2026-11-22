@@ -4,8 +4,8 @@ set -euo pipefail
 # --- Help ---
 usage() {
     cat <<'EOF'
-Usage: catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run]
-              [-- COMMAND...]
+Usage: catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]...
+              [--no-net] [--forward PORT]... [--dry-run] [-- COMMAND...]
 
 Launch a bubblewrap sandbox for a coding agent.
 
@@ -15,6 +15,12 @@ Arguments:
   --gpu            Passthrough GPU devices (NVIDIA / DRM) into sandbox
   --ro PATH        Mount PATH read-only at the same path (repeatable)
   --rw PATH        Mount PATH read-write at the same path (repeatable)
+  --no-net         Isolate the network: the sandbox only has its own
+                   (empty) loopback interface
+  --forward SPEC   Forward a host localhost port into the sandbox's
+                   loopback. SPEC is PORT or HOST_PORT:SANDBOX_PORT
+                   (repeatable, implies --no-net, needs socat;
+                   SANDBOX_PORT must be >= 1024)
   --dry-run        Print the bwrap command instead of running it
   -h, --help       Show this help
   --               Optional separator before command args
@@ -28,6 +34,7 @@ Examples:
   catbox dev -- python script.py      # Run a command in dev workspace
   catbox --gpu -- nvidia-smi          # Run with GPU passthrough
   catbox --ro ~/datasets --rw /srv/out  # Extra read-only / read-write paths
+  catbox --forward 11434 -- pi        # Only reach host localhost:11434
 EOF
 }
 
@@ -35,6 +42,8 @@ EOF
 WORKSPACE_INPUT="default"
 GPU_ENABLED=false
 DRY_RUN=false
+NO_NET=false
+FORWARDS=()       # entries of the form "HOST_PORT:SANDBOX_PORT"
 EXTRA_MOUNTS=()   # entries of the form "ro:/abs/path" or "rw:/abs/path"
 
 die() { echo "Error: $*" >&2; exit 1; }
@@ -47,6 +56,21 @@ while [[ $# -gt 0 ]]; do
         --ro|--rw)
             [[ $# -ge 2 && "$2" != -- ]] || die "$1 requires a PATH argument"
             EXTRA_MOUNTS+=("${1#--}:$2"); shift 2 ;;
+        --no-net) NO_NET=true; shift ;;
+        --forward)
+            [[ $# -ge 2 && "$2" != -- ]] || die "--forward requires a PORT argument"
+            spec="$2"
+            [[ "$spec" =~ ^[0-9]+(:[0-9]+)?$ ]] || die "invalid --forward spec: $spec"
+            [[ "$spec" == *:* ]] || spec="$spec:$spec"
+            for port in "${spec%%:*}" "${spec##*:}"; do
+                (( 10#$port >= 1 && 10#$port <= 65535 )) || die "port out of range in --forward: $2"
+            done
+            spec="$((10#${spec%%:*})):$((10#${spec##*:}))"
+            (( ${spec##*:} >= 1024 )) || die "sandbox port must be >= 1024 (no capabilities to bind lower ports): $2"
+            for f in "${FORWARDS[@]}"; do
+                [[ "${f##*:}" != "${spec##*:}" ]] || die "sandbox port ${spec##*:} is forwarded twice"
+            done
+            FORWARDS+=("$spec"); NO_NET=true; shift 2 ;;
         --)    shift; break ;;
         -*)    echo "Unknown option: $1" >&2; exit 1 ;;
         *)     WORKSPACE_INPUT="$1"; shift ;;
@@ -136,6 +160,29 @@ if ! command -v bwrap &> /dev/null; then
     exit 1
 fi
 
+if [[ ${#FORWARDS[@]} -gt 0 ]] && ! command -v socat &> /dev/null; then
+    die "--forward requires socat. Install with: sudo apt install socat"
+fi
+
+# --- Run directory: host-side sockets shared with the sandbox at /run/catbox ---
+# Holds the forwarding sockets and the sandbox init script.
+RUN_ARGS=()
+RUNDIR=
+CLEANUP_PIDS=()
+cleanup() {
+    [[ ${#CLEANUP_PIDS[@]} -gt 0 ]] && kill "${CLEANUP_PIDS[@]}" 2>/dev/null
+    [[ -n "$RUNDIR" ]] && rm -rf "$RUNDIR"
+    return 0
+}
+if [[ ${#FORWARDS[@]} -gt 0 ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX"
+    else
+        RUNDIR="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/catbox.XXXXXX")"
+    fi
+    RUN_ARGS=(--ro-bind "$RUNDIR" /run/catbox)
+fi
+
 # --- Create workspace directory if not already exists ---
 [[ "$DRY_RUN" == "true" ]] || mkdir -p "$HOST_WORKSPACE_PATH"
 
@@ -145,6 +192,14 @@ if [[ "$DRY_RUN" != "true" ]]; then
     echo "📂  Workspace: $HOST_WORKSPACE_PATH → $SANDBOX_WORKSPACE_PATH"
     echo "🔒  System: RO  |  Home: whitelist-only  |  Namespaces: user+pid+ipc"
     [[ "$GPU_ENABLED" == "true" ]] && echo "🎮  GPU: passthrough enabled (NVIDIA + DRM)"
+    if [[ "$NO_NET" == "true" ]]; then
+        echo "🌐  Network: isolated (loopback only)"
+    else
+        echo "🌐  Network: shared with host"
+    fi
+    for f in "${FORWARDS[@]}"; do
+        echo "🔌  Forward: host 127.0.0.1:${f%%:*} → sandbox 127.0.0.1:${f##*:}"
+    done
     for i in "${!EXTRA_PATHS[@]}"; do
         echo "📎  Extra path (${EXTRA_MODES[$i]}): ${EXTRA_PATHS[$i]}"
     done
@@ -209,6 +264,12 @@ BIND_ARGS=()
 [[ -d "$REAL_HOME/.config/opencode" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.config/opencode" "$REAL_HOME/.config/opencode")
 [[ -d "$REAL_HOME/.cache/opencode" ]] && BIND_ARGS+=(--bind "$REAL_HOME/.cache/opencode" "$REAL_HOME/.cache/opencode")
 
+if [[ "$NO_NET" == "true" ]]; then
+    NET_ARGS=(--unshare-net)
+else
+    NET_ARGS=(--share-net)
+fi
+
 # Build the bwrap command as an array
 BWRAP_ARGS=(
     --unshare-user
@@ -232,6 +293,7 @@ BWRAP_ARGS=(
     --tmpfs /var/tmp
     --tmpfs /run
     "${DNS_ARGS[@]}"
+    "${RUN_ARGS[@]}"
     "${DATA_BINDS[@]}"
     --proc /proc
     --dev /dev
@@ -242,7 +304,7 @@ BWRAP_ARGS=(
     --bind "$HOST_WORKSPACE_PATH" "$SANDBOX_WORKSPACE_PATH"
     "${EXTRA_ARGS[@]}"
 
-    --share-net
+    "${NET_ARGS[@]}"
     --setenv HOME "$REAL_HOME"
     --setenv USER "$REAL_USER"
     --setenv LOGNAME "$REAL_USER"
@@ -253,10 +315,47 @@ BWRAP_ARGS=(
 CMD=("$@")
 [[ ${#CMD[@]} -eq 0 ]] && CMD=(/bin/bash)
 
+# With forwards, the command runs through an init script that starts the
+# in-sandbox listeners (TCP on loopback -> unix socket in /run/catbox).
+if [[ ${#FORWARDS[@]} -gt 0 ]]; then
+    CMD=(/bin/bash /run/catbox/init.sh "${CMD[@]}")
+fi
+
 if [[ "$DRY_RUN" == "true" ]]; then
     printf '%q ' bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
     echo
     exit 0
 fi
 
-exec bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
+if [[ ${#FORWARDS[@]} -eq 0 ]]; then
+    exec bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
+fi
+
+# Host side: one socat per forward, in its own session so a Ctrl-C on the
+# terminal does not kill the forwarders while the sandbox shell lives on.
+INIT="$RUNDIR/init.sh"
+printf '#!/bin/bash\n' > "$INIT"
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+for f in "${FORWARDS[@]}"; do
+    hport="${f%%:*}"; sport="${f##*:}"
+    setsid socat "UNIX-LISTEN:$RUNDIR/fwd-$sport.sock,fork,mode=600" "TCP:127.0.0.1:$hport" &
+    CLEANUP_PIDS+=($!)
+    printf 'setsid socat TCP-LISTEN:%s,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/run/catbox/fwd-%s.sock &\n' \
+        "$sport" "$sport" >> "$INIT"
+done
+printf 'exec "$@"\n' >> "$INIT"
+
+# Remove the forwarders even if catbox is killed with SIGKILL.
+setsid bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 1; done
+                shift; dir="$1"; shift; kill "$@" 2>/dev/null; rm -rf "$dir"' \
+    _ $$ "$RUNDIR" "${CLEANUP_PIDS[@]}" &
+
+# Wait for the sockets so the first connection from the sandbox cannot fail.
+for f in "${FORWARDS[@]}"; do
+    for _ in {1..50}; do [[ -S "$RUNDIR/fwd-${f##*:}.sock" ]] && break; sleep 0.1; done
+done
+
+bwrap "${BWRAP_ARGS[@]}" "${CMD[@]}"
+exit $?

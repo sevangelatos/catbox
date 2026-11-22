@@ -9,7 +9,7 @@ A [bubblewrap](https://github.com/containers/bubblewrap) sandbox launcher for co
 ## Usage
 
 ```bash
-catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run] [-- COMMAND...]
+catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--no-net] [--forward PORT]... [--dry-run] [-- COMMAND...]
 ```
 
 | Mode | Example | Description |
@@ -21,6 +21,8 @@ catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run] [-- COMMAND
 | Run in named workspace | `catbox dev -- python script.py` | Run a command in `./sandboxes/dev` |
 | GPU Support | `catbox --gpu` | Passthrough GPU devices (NVIDIA / DRM) |
 | Extra paths | `catbox --ro ~/data --rw /srv/out` | Mount extra paths read-only / read-write at the same path |
+| Isolated network | `catbox --no-net` | Sandbox only has its own empty loopback |
+| Forward a host port | `catbox --forward 11434` | Reach only host `127.0.0.1:11434` (implies `--no-net`) |
 | Dry run | `catbox --dry-run` | Print the `bwrap` command without running it |
 
 ## Security Model
@@ -35,7 +37,7 @@ catbox [WORKSPACE] [--gpu] [--ro PATH]... [--rw PATH]... [--dry-run] [-- COMMAND
   - `.bashrc`, `.gitconfig`, `.profile` (files)
   - `.pi`, `.local`, `.npm`, `.opencode`, `.config/opencode`, `.cache/opencode` (directories)
 - **Temporary directories** — `/tmp`, `/var/tmp`, `/run` are tmpfs
-- **Network** — shared with the host
+- **Network** — shared with the host by default; `--no-net` / `--forward` isolate it (see below)
 
 ## Workspaces
 
@@ -53,6 +55,24 @@ Workspace names must be alphanumeric (dashes and underscores allowed).
 - is `/` or contains/equals `$HOME`
 - overlaps a system path already mounted (`/usr`, `/etc`, `/opt`, `/bin`, `/lib`, `/lib64`, `/sbin`, `/snap`, `/proc`, `/dev`, `/sys`), or equals/contains `/tmp`, `/var/tmp` or `/run`
 - overlaps the workspace or another extra path
+
+## Network isolation
+
+`--no-net` runs the sandbox in its own network namespace with only an empty loopback. The host's `localhost` is **not** reachable, so a local model server would be cut off too.
+
+`--forward PORT` (repeatable, implies `--no-net`) exposes selected host loopback ports inside the sandbox:
+
+- `--forward 11434` — host `127.0.0.1:11434` appears as `127.0.0.1:11434` in the sandbox
+- `--forward 8080:9000` — host `127.0.0.1:8080` appears as sandbox `127.0.0.1:9000`
+
+Details:
+
+- Needs `socat` on the host (`sudo apt install socat`).
+- Forwarding goes through unix sockets in a temporary directory under `$XDG_RUNTIME_DIR`, mounted at `/run/catbox`. Only the listed ports are reachable.
+- The sandbox port must be >= 1024 (the sandbox has no capabilities to bind lower ports).
+- Forwarders are removed when catbox exits, including when it is killed.
+- Without internet access, `npm`, `pip`, `git` over https and similar tools do not work.
+- Anything listening on a forwarded port gets full access from the sandbox.
 
 ## Environment
 
