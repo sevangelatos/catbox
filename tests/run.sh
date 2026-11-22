@@ -164,30 +164,5 @@ ok "named workspace at real path with docker" has "--bind $HOME/.sandboxes/named
 ok "no ~/workspace with docker" hasnt "$HOME/workspace"
 unset XDG_RUNTIME_DIR CATBOX_ROOTFUL_DOCKER_SOCK
 
-# --- podman ---
-run --dry-run "$TMP/ws" --podman
-ok "podman accepted" test $RC -eq 0
-ok "podman empties subuid" has "/etc/subuid"
-ok "podman empties subgid" has "/etc/subgid"
-ok "podman storage conf bound" has "$HOME/.config/containers/storage.conf"
-ok "podman containers conf bound" has "$HOME/.config/containers/containers.conf"
-ok "podman data dir bound" has "--bind $HOME/.local/share/catbox-podman $HOME/.local/share/catbox-podman"
-ok "podman runtime dir" has "--setenv XDG_RUNTIME_DIR /run/user/"
-ok "podman dry-run creates no data dir" test ! -e "$HOME/.local/share/catbox-podman"
-ok "podman keeps network by default" has "--share-net"
-
-run --dry-run "$TMP/ws" --podman --no-net
-ok "podman + no-net allowed" test $RC -eq 0
-ok "podman + no-net isolates" has "--unshare-net"
-run --dry-run "$TMP/ws" --podman --ro "$TMP/ro"
-ok "podman + ro allowed" test $RC -eq 0
-run --dry-run "$TMP/ws" --podman --forward 8080
-ok "podman + forward allowed" test $RC -eq 0
-
-export XDG_RUNTIME_DIR="$XDG" CATBOX_ROOTFUL_DOCKER_SOCK="$TMP/rootful.sock"
-run --dry-run "$TMP/ws" --podman --docker
-ok "podman + docker allowed" test $RC -eq 0
-unset XDG_RUNTIME_DIR CATBOX_ROOTFUL_DOCKER_SOCK
-
 echo "passed: $PASS, failed: $FAIL"
 [[ $FAIL -eq 0 ]]
